@@ -223,6 +223,8 @@ def run_photomaker_eval(
         trigger_word="img",
         pm_version="v1",
     )
+    # Upstream TencentARC/PhotoMaker main hardcodes num_tokens=2 (v2) even for pm_version="v1"
+    pipe.num_tokens = 1
     pipe.id_encoder.to(device)
     pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
     pipe.fuse_lora()
