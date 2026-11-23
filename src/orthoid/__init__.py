@@ -6,6 +6,7 @@ from .irse50 import IRSE50Encoder
 from .mask import FaceMaskBuilder
 from .models import best_vae_dtype
 from .optim import mgda_two_task
+from .pfp import PFPConfig, PurificationFixedPointProtector, TweediePurifierOperator
 from .protector import OrthoIDConfig, OrthoIDProtector
 from .subspace import (
     DEFAULT_ATTRIBUTE_PAIRS,
@@ -24,7 +25,10 @@ __all__ = [
     "MidBandFilter",
     "OrthoIDConfig",
     "OrthoIDProtector",
+    "PFPConfig",
     "PublishableBudgetProjector",
+    "PurificationFixedPointProtector",
+    "TweediePurifierOperator",
     "best_vae_dtype",
     "build_photometric_basis",
     "di_transform",
