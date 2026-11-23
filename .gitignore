@@ -1,0 +1,30 @@
+# Local environments & OS
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Internal notes, drafts, and local caches (never publish to public repo)
+.agents/
+.aris/
+AGENTS.md
+HANDOFF.md
+idea-stage/
+refine-logs/
+templates/
+results/
+notebooks/
+requirements-local.txt
+
+# Model weights, datasets & media outputs
+*.pth
+*.pt
+*.onnx
+*.safetensors
+*.bin
+*.ckpt
+*.tar.gz
+*.zip
+*.png
+*.jpg
+*.jpeg
