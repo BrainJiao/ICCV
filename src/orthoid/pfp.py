@@ -134,7 +134,7 @@ class PFPConfig:
     t_max: int = 110
     purified_id_weight: float = 1.0
     direct_id_weight: float = 0.65
-    fixed_point_weight: float = 12.0
+    fixed_point_weight: float = 0.65
     attr_lock_weight: float = 0.5
     dodge_weight: float = 0.65
     mgda_cnn_weight: float = 0.50
@@ -335,6 +335,7 @@ class PurificationFixedPointProtector:
         raw_conflict_hits: List[float] = []
         both_descent_hits: List[float] = []
         fp_residual_trace: List[float] = []
+        fp_ratio_trace: List[float] = []
 
         def _rms_norm(t: torch.Tensor) -> torch.Tensor:
             return (t.reshape(b, -1).pow(2).mean(dim=1) + 1e-12).sqrt().view(b, 1, 1, 1)
@@ -365,10 +366,16 @@ class PurificationFixedPointProtector:
                     p_clean = self.tweedie_op.tweedie_denoise(x_clean, t_int, eps_noise)
                 p_cur = self.tweedie_op.tweedie_denoise(x_cur, t_int, eps_noise)
 
-                # Paired Fixed-Point Residual: || (P_t(x + delta) - P_t(x)) - delta ||_2^2
+                # Scale-free Normalized Fixed-Point Drift Ratio:
+                #   || (P_t(x + delta) - P_t(x)) - delta ||_2 / (||delta||_2 + 1e-3)
+                # O(1) scale matching cosine identity loss; 0 iff J_{P_t}(x) delta == delta (Prop 1).
                 fp_err = (p_cur - p_clean) - eff_delta
-                l_fp = fp_err.pow(2).mean()
-                fp_residual_trace.append(float(fp_err.pow(2).mean().sqrt().item() * 255.0))
+                fp_rms = (fp_err.reshape(b, -1).pow(2).mean(dim=1) + 1e-12).sqrt()
+                delta_rms = (eff_delta.reshape(b, -1).pow(2).mean(dim=1) + 1e-12).sqrt()
+                fp_ratio = fp_rms / (delta_rms + 1e-3)
+                l_fp = fp_ratio.mean()
+                fp_residual_trace.append(float(fp_rms.mean().item() * 255.0))
+                fp_ratio_trace.append(float(fp_ratio.mean().item()))
 
                 if self.cfg.use_purification_in_loop:
                     p_cur_eot = (
@@ -455,6 +462,8 @@ class PurificationFixedPointProtector:
                 "both_paradigm_descent_pct": float(100.0 * np.mean(both_descent_hits)),
                 "mean_fp_residual_255": float(np.mean(fp_residual_trace)) if fp_residual_trace else None,
                 "final_fp_residual_255": float(fp_residual_trace[-1]) if fp_residual_trace else None,
+                "mean_fp_ratio": float(np.mean(fp_ratio_trace)) if fp_ratio_trace else None,
+                "final_fp_ratio": float(fp_ratio_trace[-1]) if fp_ratio_trace else None,
                 "lpips": lpips_final,
                 "attr_drift": attr_drift,
                 "config": asdict(self.cfg),
@@ -513,6 +522,8 @@ class PurificationFixedPointProtector:
                 "both_paradigm_descent_pct": _wavg("both_paradigm_descent_pct"),
                 "mean_fp_residual_255": _wavg("mean_fp_residual_255"),
                 "final_fp_residual_255": _wavg("final_fp_residual_255"),
+                "mean_fp_ratio": _wavg("mean_fp_ratio"),
+                "final_fp_ratio": _wavg("final_fp_ratio"),
                 "lpips": _wavg("lpips"),
                 "attr_drift": merged_attr,
                 "config": diags[0]["config"],

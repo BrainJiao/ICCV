@@ -262,7 +262,7 @@ def main() -> None:
                 use_fixed_point_loss=True,
                 use_pythagorean_target=True,
                 use_mgda=True,
-                fixed_point_weight=12.0,
+                fixed_point_weight=0.65,
                 target_mode="target_free",
             ),
         ),
