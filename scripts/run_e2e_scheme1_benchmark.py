@@ -166,6 +166,15 @@ def _install_diffusers_compat_shims() -> None:
             mod.MultiControlNetModel = MultiControlNetModel
             sys.modules["diffusers.pipelines.controlnet.multicontrolnet"] = mod
 
+    # Guard against Colab's preinstalled torchao==0.10.0 breaking peft LoRA dispatch
+    try:
+        import peft.import_utils as _peft_iu
+        import peft.tuners.lora.torchao as _peft_tao
+        _peft_iu.is_torchao_available = lambda: False
+        _peft_tao.is_torchao_available = lambda: False
+    except Exception:
+        pass
+
 
 def _best_sdxl_dtype(device: str) -> torch.dtype:
     if device == "cuda" and torch.cuda.is_available():
@@ -372,6 +381,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--gen-size", type=int, default=768)
     p.add_argument("--skip-e2e", action="store_true")
     p.add_argument("--e2e-fast", action="store_true", help="Skip Stage 1 ablation & extra purifiers to focus runtime on Stage 2 E2E generators")
+    p.add_argument("--generators", type=str, default="both", choices=["both", "photomaker", "instantid"])
     p.add_argument("--out-dir", type=str, default=str(REPO_ROOT / "results"))
     p.add_argument("--out-name", type=str, default="e2e_scheme1_benchmark.json")
     return p.parse_args()
@@ -649,55 +659,57 @@ def main() -> None:
         clear_cuda()
 
         # 1. Real End-to-End PhotoMaker SDXL
-        try:
-            results["stage2_e2e_generators"]["PhotoMaker"] = run_photomaker_eval(
-                e2e_methods,
-                e2e_indices,
-                gt_id_indices,
-                gallery_fn,
-                gallery_buf,
-                eval_fn,
-                eval_buf,
-                tau_fn,
-                tau_buf,
-                device=device,
-                steps=args.gen_steps,
-                gen_size=args.gen_size,
-            )
-        except Exception as exc:
-            import traceback
-            tb = traceback.format_exc()
-            log(f"[PhotoMaker ERROR] {exc}\n{tb}")
-            results["stage2_e2e_generators"]["PhotoMaker"] = {"error": str(exc), "traceback": tb}
-            clear_cuda()
-        results["meta"]["total_elapsed_s"] = float(time.time() - t_all)
-        out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
+        if args.generators in ("both", "photomaker"):
+            try:
+                results["stage2_e2e_generators"]["PhotoMaker"] = run_photomaker_eval(
+                    e2e_methods,
+                    e2e_indices,
+                    gt_id_indices,
+                    gallery_fn,
+                    gallery_buf,
+                    eval_fn,
+                    eval_buf,
+                    tau_fn,
+                    tau_buf,
+                    device=device,
+                    steps=args.gen_steps,
+                    gen_size=args.gen_size,
+                )
+            except Exception as exc:
+                import traceback
+                tb = traceback.format_exc()
+                log(f"[PhotoMaker ERROR] {exc}\n{tb}")
+                results["stage2_e2e_generators"]["PhotoMaker"] = {"error": str(exc), "traceback": tb}
+                clear_cuda()
+            results["meta"]["total_elapsed_s"] = float(time.time() - t_all)
+            out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
 
         # 2. Real End-to-End InstantID SDXL
-        try:
-            results["stage2_e2e_generators"]["InstantID"] = run_instantid_eval(
-                e2e_methods,
-                e2e_indices,
-                gt_id_indices,
-                gallery_fn,
-                gallery_buf,
-                eval_fn,
-                eval_buf,
-                eval_ant,
-                tau_fn,
-                tau_buf,
-                device=device,
-                steps=args.gen_steps,
-                gen_size=args.gen_size,
-            )
-        except Exception as exc:
-            import traceback
-            tb = traceback.format_exc()
-            log(f"[InstantID ERROR] {exc}\n{tb}")
-            results["stage2_e2e_generators"]["InstantID"] = {"error": str(exc), "traceback": tb}
-            clear_cuda()
-        results["meta"]["total_elapsed_s"] = float(time.time() - t_all)
-        out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
+        if args.generators in ("both", "instantid"):
+            try:
+                results["stage2_e2e_generators"]["InstantID"] = run_instantid_eval(
+                    e2e_methods,
+                    e2e_indices,
+                    gt_id_indices,
+                    gallery_fn,
+                    gallery_buf,
+                    eval_fn,
+                    eval_buf,
+                    eval_ant,
+                    tau_fn,
+                    tau_buf,
+                    device=device,
+                    steps=args.gen_steps,
+                    gen_size=args.gen_size,
+                )
+            except Exception as exc:
+                import traceback
+                tb = traceback.format_exc()
+                log(f"[InstantID ERROR] {exc}\n{tb}")
+                results["stage2_e2e_generators"]["InstantID"] = {"error": str(exc), "traceback": tb}
+                clear_cuda()
+            results["meta"]["total_elapsed_s"] = float(time.time() - t_all)
+            out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
 
     log(f"ALL DONE in {time.time() - t_all:.1f}s -> {out_path}")
 
