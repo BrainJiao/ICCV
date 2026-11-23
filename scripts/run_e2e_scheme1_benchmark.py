@@ -148,6 +148,32 @@ def score_generated_pils(
     }
 
 
+def _install_diffusers_compat_shims() -> None:
+    """Restore moved diffusers symbols expected by PhotoMaker and InstantID on diffusers >= 0.35."""
+    import types
+    import diffusers.loaders as _dl
+
+    if not hasattr(_dl, "StableDiffusionXLLoraLoaderMixin"):
+        from diffusers.loaders.lora_pipeline import StableDiffusionXLLoraLoaderMixin as _SDXLLoraMixin
+        _dl.StableDiffusionXLLoraLoaderMixin = _SDXLLoraMixin
+
+    if "diffusers.pipelines.controlnet.multicontrolnet" not in sys.modules:
+        try:
+            __import__("diffusers.pipelines.controlnet.multicontrolnet")
+        except ModuleNotFoundError:
+            from diffusers.models.controlnets.multicontrolnet import MultiControlNetModel
+            mod = types.ModuleType("diffusers.pipelines.controlnet.multicontrolnet")
+            mod.MultiControlNetModel = MultiControlNetModel
+            sys.modules["diffusers.pipelines.controlnet.multicontrolnet"] = mod
+
+
+def _best_sdxl_dtype(device: str) -> torch.dtype:
+    if device == "cuda" and torch.cuda.is_available():
+        major, _ = torch.cuda.get_device_capability(0)
+        return torch.bfloat16 if major >= 8 else torch.float16
+    return torch.float32
+
+
 def run_photomaker_eval(
     method_tensors: Dict[str, Dict[str, torch.Tensor]],
     e2e_indices: List[int],
@@ -162,11 +188,8 @@ def run_photomaker_eval(
     steps: int = 20,
     gen_size: int = 768,
 ) -> Dict[str, Dict[str, Dict[str, float]]]:
+    _install_diffusers_compat_shims()
     from diffusers import DDIMScheduler
-    import diffusers.loaders as _diffusers_loaders
-    if not hasattr(_diffusers_loaders, "StableDiffusionXLLoraLoaderMixin"):
-        from diffusers.loaders.lora_pipeline import StableDiffusionXLLoraLoaderMixin as _SDXLLoraMixin
-        _diffusers_loaders.StableDiffusionXLLoraLoaderMixin = _SDXLLoraMixin
     from huggingface_hub import hf_hub_download
 
     pm_repo = ensure_repo("https://github.com/TencentARC/PhotoMaker.git", Path("/content/PhotoMaker"))
@@ -174,11 +197,12 @@ def run_photomaker_eval(
         sys.path.insert(0, str(pm_repo))
     from photomaker import PhotoMakerStableDiffusionXLPipeline
 
-    log("Loading PhotoMaker + SG161222/RealVisXL_V3.0 (bfloat16)...")
+    gen_dtype = _best_sdxl_dtype(device)
+    log(f"Loading PhotoMaker + SG161222/RealVisXL_V3.0 ({gen_dtype})...")
     pm_ckpt = hf_hub_download(repo_id="TencentARC/PhotoMaker", filename="photomaker-v1.bin", repo_type="model")
     pipe = PhotoMakerStableDiffusionXLPipeline.from_pretrained(
         "SG161222/RealVisXL_V3.0",
-        torch_dtype=torch.bfloat16,
+        torch_dtype=gen_dtype,
         use_safetensors=True,
         variant="fp16",
     ).to(device)
@@ -248,6 +272,7 @@ def run_instantid_eval(
     steps: int = 20,
     gen_size: int = 768,
 ) -> Dict[str, Dict[str, Dict[str, float]]]:
+    _install_diffusers_compat_shims()
     import cv2
     from diffusers.models import ControlNetModel
     from huggingface_hub import hf_hub_download, snapshot_download
@@ -257,7 +282,8 @@ def run_instantid_eval(
         sys.path.insert(0, str(id_repo))
     from pipeline_stable_diffusion_xl_instantid import StableDiffusionXLInstantIDPipeline, draw_kps
 
-    log("Loading InstantID (ControlNet + ip-adapter.bin + SG161222/RealVisXL_V3.0, bfloat16)...")
+    gen_dtype = _best_sdxl_dtype(device)
+    log(f"Loading InstantID (ControlNet + ip-adapter.bin + SG161222/RealVisXL_V3.0, {gen_dtype})...")
     cnet_dir = Path("/content/InstantID_ckpt/ControlNetModel")
     if not (cnet_dir / "config.json").exists():
         snapshot_download(
@@ -267,11 +293,11 @@ def run_instantid_eval(
         )
     ip_path = hf_hub_download(repo_id="InstantX/InstantID", filename="ip-adapter.bin", repo_type="model")
 
-    controlnet = ControlNetModel.from_pretrained(str(cnet_dir), torch_dtype=torch.bfloat16)
+    controlnet = ControlNetModel.from_pretrained(str(cnet_dir), torch_dtype=gen_dtype)
     pipe = StableDiffusionXLInstantIDPipeline.from_pretrained(
         "SG161222/RealVisXL_V3.0",
         controlnet=controlnet,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=gen_dtype,
         use_safetensors=True,
         variant="fp16",
     ).to(device)
@@ -345,6 +371,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--gen-steps", type=int, default=20)
     p.add_argument("--gen-size", type=int, default=768)
     p.add_argument("--skip-e2e", action="store_true")
+    p.add_argument("--e2e-fast", action="store_true", help="Skip Stage 1 ablation & extra purifiers to focus runtime on Stage 2 E2E generators")
     p.add_argument("--out-dir", type=str, default=str(REPO_ROOT / "results"))
     p.add_argument("--out-name", type=str, default="e2e_scheme1_benchmark.json")
     return p.parse_args()
@@ -512,6 +539,9 @@ def main() -> None:
         ),
     ]
 
+    if args.e2e_fast:
+        pfp_variants = [v for v in pfp_variants if not v[0].startswith("Ablation:")]
+
     for name, cfg in pfp_variants:
         log(f"--- Generating {name} ---")
         prot = PurificationFixedPointProtector(
@@ -568,19 +598,25 @@ def main() -> None:
             "visual": {"psnr_db": psnr_val, "ssim": ssim_val, "lpips": lpips_val},
             "attr_drift": attr_d,
             "direct": score_interfaces(x_prot),
-            "jpeg75": score_interfaces(purify_jpeg(x_prot, quality=75)),
-            "unseen_sdvae": score_interfaces(purify_unseen_sdvae(x_prot, unseen_sdvae, microbatch=microbatch)),
             "diffpure_t100": score_interfaces(x_dp100),
-            "diffpure_t150": score_interfaces(diffpure.purify(x_prot, t_start=150, steps=8, seed=42)),
             "mechanism": mech_diags[name],
         }
+        if not args.e2e_fast:
+            row["jpeg75"] = score_interfaces(purify_jpeg(x_prot, quality=75))
+            row["unseen_sdvae"] = score_interfaces(purify_unseen_sdvae(x_prot, unseen_sdvae, microbatch=microbatch))
+            row["diffpure_t150"] = score_interfaces(diffpure.purify(x_prot, t_start=150, steps=8, seed=42))
         results["stage1_interfaces"].append(row)
+        sdvae_str = (
+            f"SDVAE[Ant={row['unseen_sdvae']['instantid_antelope_cos']:.3f} FN_D={row['unseen_sdvae']['facenet_vgg_dodge_pct']:.0f}%] | "
+            if "unseen_sdvae" in row
+            else ""
+        )
         log(
             f"[Stage 1] {name} | PSNR={psnr_val:.2f} LPIPS={lpips_val:.4f} 5Ax={attr_d['mean_5axis_drift']:.4f} "
             f"FP_ratio={mech_diags[name].get('final_fp_ratio')} | "
             f"DIR[PM={row['direct']['pm_clip_l14_cos']:.3f} Buf={row['direct']['faceid_buffalo_cos']:.3f} "
             f"Ant={row['direct']['instantid_antelope_cos']:.3f} FN_D={row['direct']['facenet_vgg_dodge_pct']:.0f}%] | "
-            f"SDVAE[Ant={row['unseen_sdvae']['instantid_antelope_cos']:.3f} FN_D={row['unseen_sdvae']['facenet_vgg_dodge_pct']:.0f}%] | "
+            f"{sdvae_str}"
             f"DP100[PM={row['diffpure_t100']['pm_clip_l14_cos']:.3f} Buf={row['diffpure_t100']['faceid_buffalo_cos']:.3f} "
             f"Ant={row['diffpure_t100']['instantid_antelope_cos']:.3f} FN_D={row['diffpure_t100']['facenet_vgg_dodge_pct']:.0f}%]"
         )
