@@ -253,10 +253,17 @@ def main() -> None:
     device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     gpu_name = torch.cuda.get_device_name(0) if device == "cuda" else device
     microbatch = args.microbatch if args.microbatch > 0 else (8 if device == "cuda" else 2)
-    log(f"M1-A Zero-Overlap Gate on {gpu_name} | ids={args.num_identities}, src/id={args.src_per_id}, mb={microbatch}, steps={args.steps}")
+    num_ids = args.num_identities
+    steps = args.steps
+    # Auto-scale cleanly if Colab falls back to older Tesla T4 (no native HW BF16)
+    if device == "cuda" and "T4" in gpu_name:
+        num_ids = min(num_ids, 8)
+        steps = min(steps, 25)
+        microbatch = min(microbatch, 4)
+    log(f"M1-A Zero-Overlap Gate on {gpu_name} | ids={num_ids}, src/id={args.src_per_id}, mb={microbatch}, steps={steps}")
 
     x_src, x_ref, x_tar, labels = load_lfw_cohort(
-        num_identities=args.num_identities,
+        num_identities=num_ids,
         photos_per_id=4,
         src_per_id=args.src_per_id,
         device=device,
@@ -354,7 +361,7 @@ def main() -> None:
         (
             "Baseline: Pixel PGD-Ensemble (Naive)",
             OrthoIDConfig(
-                steps=args.steps,
+                steps=steps,
                 use_vae_residual=False,
                 use_midband_residual=False,
                 use_face_mask=False,
@@ -370,7 +377,7 @@ def main() -> None:
         (
             "Ablation: VAE-Residual Only (Naive)",
             OrthoIDConfig(
-                steps=args.steps,
+                steps=steps,
                 use_vae_residual=True,
                 use_midband_residual=False,
                 use_face_mask=True,
@@ -386,7 +393,7 @@ def main() -> None:
         (
             "OrthoID-v2 (Target-Free, Ours)",
             OrthoIDConfig(
-                steps=args.steps,
+                steps=steps,
                 use_vae_residual=True,
                 use_midband_residual=True,
                 use_face_mask=True,
@@ -401,7 +408,7 @@ def main() -> None:
         (
             "OrthoID-v2 (Targeted, Ours)",
             OrthoIDConfig(
-                steps=args.steps,
+                steps=steps,
                 use_vae_residual=True,
                 use_midband_residual=True,
                 use_face_mask=True,
@@ -444,7 +451,7 @@ def main() -> None:
             ],
             "far01_thresholds": {"facenet": tau_fn, "buffalo_l": tau_buf, "antelopev2": tau_ant},
             "budget_spec": {"eps_255": 8.0, "rms_max_255": 5.5, "quantization": "uint8"},
-            "steps": args.steps,
+            "steps": steps,
             "microbatch": microbatch,
         },
         "clean": clean_scores,
