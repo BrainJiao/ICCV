@@ -47,6 +47,19 @@ class IDProtectorCVPR25:
                 ["git", "clone", "--depth", "1", "https://github.com/showlab/IDProtector.git", str(self.repo_dir)]
             )
 
+        dit_dir = self.repo_dir / "modelling" / "DiT"
+        if not (dit_dir / "models.py").exists():
+            rc = subprocess.call(
+                ["git", "-C", str(self.repo_dir), "submodule", "update", "--init", "--depth", "1", "modelling/DiT"]
+            )
+            if rc != 0 or not (dit_dir / "models.py").exists():
+                import shutil
+                if dit_dir.exists():
+                    shutil.rmtree(dit_dir)
+                subprocess.check_call(
+                    ["git", "clone", "--depth", "1", "https://github.com/facebookresearch/DiT.git", str(dit_dir)]
+                )
+
         if str(self.repo_dir) not in sys.path:
             sys.path.insert(0, str(self.repo_dir))
 

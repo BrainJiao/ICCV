@@ -163,6 +163,10 @@ def run_photomaker_eval(
     gen_size: int = 768,
 ) -> Dict[str, Dict[str, Dict[str, float]]]:
     from diffusers import DDIMScheduler
+    import diffusers.loaders as _diffusers_loaders
+    if not hasattr(_diffusers_loaders, "StableDiffusionXLLoraLoaderMixin"):
+        from diffusers.loaders.lora_pipeline import StableDiffusionXLLoraLoaderMixin as _SDXLLoraMixin
+        _diffusers_loaders.StableDiffusionXLLoraLoaderMixin = _SDXLLoraMixin
     from huggingface_hub import hf_hub_download
 
     pm_repo = ensure_repo("https://github.com/TencentARC/PhotoMaker.git", Path("/content/PhotoMaker"))
@@ -184,6 +188,7 @@ def run_photomaker_eval(
         subfolder="",
         weight_name=os.path.basename(pm_ckpt),
         trigger_word="img",
+        pm_version="v1",
     )
     pipe.id_encoder.to(device)
     pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
@@ -608,39 +613,53 @@ def main() -> None:
         clear_cuda()
 
         # 1. Real End-to-End PhotoMaker SDXL
-        results["stage2_e2e_generators"]["PhotoMaker"] = run_photomaker_eval(
-            e2e_methods,
-            e2e_indices,
-            gt_id_indices,
-            gallery_fn,
-            gallery_buf,
-            eval_fn,
-            eval_buf,
-            tau_fn,
-            tau_buf,
-            device=device,
-            steps=args.gen_steps,
-            gen_size=args.gen_size,
-        )
+        try:
+            results["stage2_e2e_generators"]["PhotoMaker"] = run_photomaker_eval(
+                e2e_methods,
+                e2e_indices,
+                gt_id_indices,
+                gallery_fn,
+                gallery_buf,
+                eval_fn,
+                eval_buf,
+                tau_fn,
+                tau_buf,
+                device=device,
+                steps=args.gen_steps,
+                gen_size=args.gen_size,
+            )
+        except Exception as exc:
+            import traceback
+            tb = traceback.format_exc()
+            log(f"[PhotoMaker ERROR] {exc}\n{tb}")
+            results["stage2_e2e_generators"]["PhotoMaker"] = {"error": str(exc), "traceback": tb}
+            clear_cuda()
         results["meta"]["total_elapsed_s"] = float(time.time() - t_all)
         out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
 
         # 2. Real End-to-End InstantID SDXL
-        results["stage2_e2e_generators"]["InstantID"] = run_instantid_eval(
-            e2e_methods,
-            e2e_indices,
-            gt_id_indices,
-            gallery_fn,
-            gallery_buf,
-            eval_fn,
-            eval_buf,
-            eval_ant,
-            tau_fn,
-            tau_buf,
-            device=device,
-            steps=args.gen_steps,
-            gen_size=args.gen_size,
-        )
+        try:
+            results["stage2_e2e_generators"]["InstantID"] = run_instantid_eval(
+                e2e_methods,
+                e2e_indices,
+                gt_id_indices,
+                gallery_fn,
+                gallery_buf,
+                eval_fn,
+                eval_buf,
+                eval_ant,
+                tau_fn,
+                tau_buf,
+                device=device,
+                steps=args.gen_steps,
+                gen_size=args.gen_size,
+            )
+        except Exception as exc:
+            import traceback
+            tb = traceback.format_exc()
+            log(f"[InstantID ERROR] {exc}\n{tb}")
+            results["stage2_e2e_generators"]["InstantID"] = {"error": str(exc), "traceback": tb}
+            clear_cuda()
         results["meta"]["total_elapsed_s"] = float(time.time() - t_all)
         out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
 
