@@ -14,11 +14,13 @@ import torch.nn.functional as F
 def best_vae_dtype(device: str) -> torch.dtype:
     """
     Select the fastest numerically stable dtype for SD-VAE backward passes:
-      - CUDA with native bfloat16 (A100 / L4 / H100 / RTX 4090): torch.bfloat16 (FP32 exponent range, no underflow)
-      - Older CUDA (T4), Apple MPS, or CPU: torch.float32 (avoids FP16 gradient underflow)
+      - CUDA SM >= 8.0 (A100 / L4 / H100 / RTX 4090): torch.bfloat16 (native HW bf16, FP32 range, no underflow)
+      - Older CUDA (T4 SM 7.5), Apple MPS, or CPU: torch.float32 (avoids FP16 underflow and emulated bf16 overhead)
     """
-    if str(device).startswith("cuda") and torch.cuda.is_available() and torch.cuda.is_bf16_supported():
-        return torch.bfloat16
+    if str(device).startswith("cuda") and torch.cuda.is_available():
+        major, _ = torch.cuda.get_device_capability(0)
+        if major >= 8 and torch.cuda.is_bf16_supported():
+            return torch.bfloat16
     return torch.float32
 
 

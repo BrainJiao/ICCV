@@ -98,9 +98,12 @@ def load_lfw_cohort(
         for n in sorted(zf.namelist()):
             if "__MACOSX" in n or not n.lower().endswith((".jpg", ".jpeg", ".png")):
                 continue
-            parts = n.strip("/").split("/")
-            if len(parts) >= 2:
-                person = parts[-2]
+            stem = Path(n).stem
+            # Standard LFW filename format: Person_Name_0001.jpg -> person = "Person_Name"
+            if "_" not in stem:
+                continue
+            person = stem.rsplit("_", 1)[0]
+            if person:
                 by_person.setdefault(person, []).append(n)
 
         # Deterministic selection of identities with ample photos (sorted by count desc, then name)
